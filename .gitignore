@@ -1,0 +1,12 @@
+# Visual Studio 垃圾文件过滤
+.vs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+*.user
+*.aps
+*.pdb
+*.ipch
+*.db
+*.opendb
+*.pcd
