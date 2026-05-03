@@ -7,11 +7,11 @@
 #include <fstream>
 #include <iomanip>
 
-// ── 辅助：8邻域偏移 ──
+// ── 8邻域行/列偏移量（用于连通分量搜索）──
 static const int DR[8] = { -1, -1, -1,  0, 0,  1, 1, 1 };
 static const int DC[8] = { -1,  0,  1, -1, 1, -1, 0, 1 };
 
-// ── 辅助：将网格坐标转为世界坐标（使用格心）──
+// ── 网格坐标→世界坐标（格子中心点），配合 min_pt 偏移还原真实位置 ──
 static Eigen::Vector3f gridToWorld(int r, int c, float z, float gridSize,
                                    const Eigen::Vector4f& min_pt) {
     return Eigen::Vector3f(
@@ -21,7 +21,7 @@ static Eigen::Vector3f gridToWorld(int r, int c, float z, float gridSize,
     );
 }
 
-// ── 连通分量标记 (BFS, 8邻域) ──
+// ── BFS 8邻域连通分量标记：将离散点按连通性分组，每组是一条候选线段 ──
 static std::vector<std::vector<GridIndex>> connectedComponents(
     const std::unordered_set<GridIndex, GridIndexHash>& points,
     int rows, int cols)
@@ -55,7 +55,7 @@ static std::vector<std::vector<GridIndex>> connectedComponents(
     return components;
 }
 
-// ── 对连通分量内的点进行排序，形成有序折线 ──
+// ── 端点追踪排序：构建邻接表 → 找端点(邻接数=1) → 从端点出发沿邻接方向追踪，交叉口选最优方向 ──
 static std::vector<GridIndex> orderComponentPoints(
     const std::vector<GridIndex>& comp)
 {
@@ -143,7 +143,7 @@ static std::vector<GridIndex> orderComponentPoints(
     return ordered;
 }
 
-// ── 主函数：从分类网格提取特征线 ──
+// ── 特征线提取主函数：收集crest/toe点 → 连通分量标记 → 排序 → 坐标转换 → 间隙桥接 ──
 std::vector<FeatureLine> PointCloudClassification::extractFeatureLines(
     const std::vector<std::vector<GridCell>>& gridMap,
     float gridSize,
@@ -222,7 +222,7 @@ std::vector<FeatureLine> PointCloudClassification::extractFeatureLines(
     return results;
 }
 
-// ── 合并间距过小的同类型线段 ──
+// ── Union-Find合并断线：检查4种端点组合(头头/头尾/尾头/尾尾)，间距<maxDist则合并 ──
 std::vector<FeatureLine> PointCloudClassification::mergeNearbyLines(
     const std::vector<FeatureLine>& lines, float maxDist)
 {
@@ -301,7 +301,7 @@ std::vector<FeatureLine> PointCloudClassification::mergeNearbyLines(
     return merged;
 }
 
-// ── 保存为文本文件（CSV格式，适合 GIS 导入） ──
+// ── 特征线→CSV：line_id,type,type_name,point_order,x,y,z，线段间空行分隔，GIS可导入 ──
 void PointCloudClassification::saveFeatureLinesToTxt(
     const std::vector<FeatureLine>& lines, const std::string& filename)
 {
@@ -335,44 +335,3 @@ void PointCloudClassification::saveFeatureLinesToTxt(
               << "  (共 " << lines.size() << " 条)" << std::endl;
 }
 
-// ── 保存为 DXF 格式（AutoCAD / CASS 可直接打开） ──
-void PointCloudClassification::saveFeatureLinesToDXF(
-    const std::vector<FeatureLine>& lines, const std::string& filename)
-{
-    std::ofstream dxf(filename);
-    if (!dxf) {
-        std::cerr << "[错误] 无法创建文件: " << filename << std::endl;
-        return;
-    }
-
-    dxf << std::fixed << std::setprecision(4);
-
-    // DXF 头部
-    dxf << "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
-    dxf << "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n1\n";
-    // 定义图层
-    dxf << "0\nLAYER\n2\nCrestLine\n70\n0\n62\n1\n";   // 红色
-    dxf << "0\nLAYER\n2\nToeLine\n70\n0\n62\n5\n";     // 蓝色
-    dxf << "0\nENDTAB\n0\nENDSEC\n";
-
-    // 实体段
-    dxf << "0\nSECTION\n2\nENTITIES\n";
-
-    for (const auto& line : lines) {
-        const char* layer = (line.type == 0) ? "CrestLine" : "ToeLine";
-
-        for (size_t i = 0; i + 1 < line.points.size(); ++i) {
-            const auto& p0 = line.points[i];
-            const auto& p1 = line.points[i + 1];
-
-            dxf << "0\nLINE\n8\n" << layer << "\n";
-            dxf << "10\n" << p0.x() << "\n20\n" << p0.y() << "\n30\n" << p0.z() << "\n";
-            dxf << "11\n" << p1.x() << "\n21\n" << p1.y() << "\n31\n" << p1.z() << "\n";
-        }
-    }
-
-    dxf << "0\nENDSEC\n0\nEOF\n";
-    dxf.close();
-    std::cout << "[特征线] DXF 已保存至: " << filename
-              << "  (共 " << lines.size() << " 条)" << std::endl;
-}
