@@ -59,21 +59,37 @@ int main() {
         processor.refineClassification(gridMap);
     }
 
-    processor.cleanPlatformNoise(gridMap);
+    for (int i = 0; i < 3; ++i) {
+        processor.cleanPlatformNoise(gridMap);
+    }
     processor.closeSlopeHoles(gridMap);
+    processor.filterFalseSlopes(gridMap);
 
     processor.identifyBerms(gridMap);
     processor.fillBermGaps(gridMap);
+    processor.removeIsolatedBerms(gridMap);
 
     // --- 4. 提取坡顶/坡底线 ---
     std::cout << "正在提取坡顶(Crest)和坡底(Toe)特征线..." << std::endl;
     std::vector<SlopeParams> measuredParams;
     processor.extractSlopeFeatures(gridMap, measuredParams);
+    processor.thinFeatureLines(gridMap);
 
     std::vector<FeatureLine> featureLines =
-        extractFeatureLines(gridMap, gridSize, min_pt, 2, 3, 3.0f);
+        extractFeatureLines(gridMap, gridSize, min_pt, 2, 2, 1.2f);
 
-    saveFeatureLinesToTxt(featureLines, "feature_lines.csv");
+    smoothFeatureLines(featureLines, 5);
+
+    std::vector<FeatureLine> finalLines;
+    for (const auto& line : featureLines) {
+        if (line.points.size() >= 4)
+            finalLines.push_back(line);
+    }
+
+    saveFeatureLinesToTxt(finalLines, "feature_lines.csv");
+
+    std::vector<MatchedPair> matched = matchCrestAndToe(finalLines, 15.0f, 1.5f);
+    saveMatchedPairsToCSV(matched, "matched_sections.csv");
 
     // --- 5. 输出分类 PCD ---
     std::string outputName = "result_final.pcd";

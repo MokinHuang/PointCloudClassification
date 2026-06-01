@@ -3,10 +3,15 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <queue>
+#include <deque>
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // ── 8邻域偏移量 ──
 static const int DR[8] = { -1, -1, -1,  0, 0,  1, 1, 1 };
@@ -169,7 +174,7 @@ std::vector<FeatureLine> extractFeatureLines(
         auto components = connectedComponents(pointSet, rows, cols);
 
         for (auto& comp : components) {
-            if (static_cast<int>(comp.size()) < minComponentSize) continue;
+            if (static_cast<int>(comp.size()) < 3) continue;
 
             auto ordered = orderComponentPoints(comp);
             if (ordered.size() < 2) continue;
@@ -195,9 +200,16 @@ std::vector<FeatureLine> extractFeatureLines(
     if (featureType == 0 || featureType == 2) processSet(crestSet, 0);
     if (featureType == 1 || featureType == 2) processSet(toeSet,   1);
 
-    // 3. 间隙桥接
+    // 3. 间隙桥接（碎线充当"桥墩"）
     if (maxGapDist > 0.0f) {
         results = mergeNearbyLines(results, maxGapDist);
+    }
+
+    // 4. 合并后再按最小长度过滤
+    if (minComponentSize > 3) {
+        results.erase(std::remove_if(results.begin(), results.end(),
+            [&](const FeatureLine& l) { return static_cast<int>(l.points.size()) < minComponentSize; }),
+            results.end());
     }
 
     return results;
@@ -256,25 +268,57 @@ std::vector<FeatureLine> mergeNearbyLines(
             continue;
         }
 
-        FeatureLine combined;
-        combined.type = lines[indices[0]].type;
-        combined.id   = static_cast<int>(merged.size());
+        std::deque<Eigen::Vector3f> pts;
+        for (const auto& p : lines[indices[0]].points) pts.push_back(p);
 
-        for (int idx : indices) {
-            for (const auto& pt : lines[idx].points) {
-                combined.points.push_back(pt);
+        for (size_t k = 1; k < indices.size(); ++k) {
+            const auto& nl = lines[indices[k]].points;
+            float d_th = (pts.back()  - nl.front()).norm();
+            float d_tt = (pts.back()  - nl.back()).norm();
+            float d_hh = (pts.front() - nl.front()).norm();
+            float d_ht = (pts.front() - nl.back()).norm();
+
+            if (d_th <= maxDist) {
+                for (const auto& p : nl) pts.push_back(p);
+            } else if (d_tt <= maxDist) {
+                for (auto it = nl.rbegin(); it != nl.rend(); ++it) pts.push_back(*it);
+            } else if (d_hh <= maxDist) {
+                for (auto it = nl.begin(); it != nl.end(); ++it) pts.push_front(*it);
+            } else if (d_ht <= maxDist) {
+                for (const auto& p : nl) pts.push_front(p);
             }
         }
 
+        FeatureLine combined;
+        combined.type = lines[indices[0]].type;
+        combined.id   = static_cast<int>(merged.size());
+        for (const auto& p : pts) combined.points.push_back(p);
         combined.length = 0.0f;
-        for (size_t i = 1; i < combined.points.size(); ++i) {
+        for (size_t i = 1; i < combined.points.size(); ++i)
             combined.length += (combined.points[i] - combined.points[i - 1]).norm();
-        }
-
         merged.push_back(std::move(combined));
     }
 
     return merged;
+}
+
+// ── 矢量折线平滑：对内部点做 Laplacian 平滑 P_new = 0.5*P + 0.25*P_prev + 0.25*P_next ──
+void smoothFeatureLines(std::vector<FeatureLine>& lines, int iterations) {
+    for (auto& line : lines) {
+        if (line.points.size() < 3) continue;
+        for (int iter = 0; iter < iterations; ++iter) {
+            std::vector<Eigen::Vector3f> smoothed = line.points;
+            for (size_t i = 1; i + 1 < line.points.size(); ++i) {
+                smoothed[i] = 0.5f * line.points[i]
+                            + 0.25f * line.points[i - 1]
+                            + 0.25f * line.points[i + 1];
+            }
+            line.points = std::move(smoothed);
+        }
+        line.length = 0.0f;
+        for (size_t i = 1; i < line.points.size(); ++i)
+            line.length += (line.points[i] - line.points[i - 1]).norm();
+    }
 }
 
 // ── 特征线→CSV ──
@@ -308,4 +352,74 @@ void saveFeatureLinesToTxt(
     ofs.close();
     std::cout << "[特征线] 已保存至: " << filename
               << "  (共 " << lines.size() << " 条)" << std::endl;
+}
+
+// ── 坡顶坡底空间匹配：每个crest点找水平距离最近且满足高差条件的toe点 ──
+std::vector<MatchedPair> matchCrestAndToe(
+    const std::vector<FeatureLine>& lines,
+    float maxSearchDistXY, float minDropZ)
+{
+    std::vector<Eigen::Vector3f> crestPts, toePts;
+    for (const auto& line : lines) {
+        if (line.type == 0) {
+            for (const auto& p : line.points) crestPts.push_back(p);
+        } else if (line.type == 1) {
+            for (const auto& p : line.points) toePts.push_back(p);
+        }
+    }
+
+    std::vector<MatchedPair> results;
+    for (const auto& crest : crestPts) {
+        float bestDist = maxSearchDistXY;
+        Eigen::Vector3f bestToe;
+        bool found = false;
+
+        for (const auto& toe : toePts) {
+            float dx = crest.x() - toe.x();
+            float dy = crest.y() - toe.y();
+            float d_xy = std::sqrt(dx * dx + dy * dy);
+            float d_z = crest.z() - toe.z();
+
+            if (d_xy < maxSearchDistXY && d_z > minDropZ && d_xy < bestDist) {
+                bestDist = d_xy;
+                bestToe = toe;
+                found = true;
+            }
+        }
+
+        if (found) {
+            MatchedPair pair;
+            pair.crest_pt = crest;
+            pair.toe_pt = bestToe;
+            pair.horizontal_dist = bestDist;
+            pair.vertical_drop = crest.z() - bestToe.z();
+            pair.slope_angle = std::atan2(pair.vertical_drop, bestDist) * 180.0 / M_PI;
+            results.push_back(pair);
+        }
+    }
+    return results;
+}
+
+// ── 匹配结果→CSV ──
+void saveMatchedPairsToCSV(
+    const std::vector<MatchedPair>& pairs, const std::string& filename)
+{
+    std::ofstream ofs(filename);
+    if (!ofs) {
+        std::cerr << "[错误] 无法创建文件: " << filename << std::endl;
+        return;
+    }
+
+    ofs << std::fixed << std::setprecision(4);
+    ofs << "crest_x,crest_y,crest_z,toe_x,toe_y,toe_z,h_dist,v_drop,angle\n";
+
+    for (const auto& p : pairs) {
+        ofs << p.crest_pt.x() << "," << p.crest_pt.y() << "," << p.crest_pt.z() << ","
+            << p.toe_pt.x()   << "," << p.toe_pt.y()   << "," << p.toe_pt.z()   << ","
+            << p.horizontal_dist << "," << p.vertical_drop << "," << p.slope_angle << "\n";
+    }
+
+    ofs.close();
+    std::cout << "[匹配] 已保存至: " << filename
+              << "  (共 " << pairs.size() << " 对)" << std::endl;
 }

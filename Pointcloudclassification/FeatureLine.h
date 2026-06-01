@@ -58,5 +58,25 @@ std::vector<FeatureLine> extractFeatureLines(
 std::vector<FeatureLine> mergeNearbyLines(
     const std::vector<FeatureLine>& lines, float maxDist);
 
+void smoothFeatureLines(
+    std::vector<FeatureLine>& lines, int iterations = 3);
+
 void saveFeatureLinesToTxt(
     const std::vector<FeatureLine>& lines, const std::string& filename);
+
+// ── 坡顶坡底空间匹配 ──
+struct MatchedPair {
+    Eigen::Vector3f crest_pt;
+    Eigen::Vector3f toe_pt;
+    float horizontal_dist;
+    float vertical_drop;
+    float slope_angle;
+};
+
+std::vector<MatchedPair> matchCrestAndToe(
+    const std::vector<FeatureLine>& lines,
+    float maxSearchDistXY = 15.0f,
+    float minDropZ = 1.5f);
+
+void saveMatchedPairsToCSV(
+    const std::vector<MatchedPair>& pairs, const std::string& filename);

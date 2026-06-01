@@ -21,9 +21,6 @@
     <ClCompile Include="PointCloudClassification.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="SafetyCalculator.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="FeatureLine.cpp">
       <Filter>源文件</Filter>
     </ClCompile>

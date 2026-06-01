@@ -32,11 +32,16 @@ public:
 
     void closeSlopeHoles(std::vector<std::vector<GridCell>>& gridMap);
 
+    void filterFalseSlopes(std::vector<std::vector<GridCell>>& gridMap);
+
+    void smoothFeatureLines(std::vector<FeatureLine>& lines, int iterations);
     // ── 围堰处理 ──
 
     void identifyBerms(std::vector<std::vector<GridCell>>& gridMap);
 
     void fillBermGaps(std::vector<std::vector<GridCell>>& gridMap);
+
+    void removeIsolatedBerms(std::vector<std::vector<GridCell>>& gridMap);
 
     // ── 特征提取 ──
 
@@ -44,6 +49,8 @@ public:
         std::vector<std::vector<GridCell>>& gridMap,
         std::vector<SlopeParams>& results
     );
+
+    void thinFeatureLines(std::vector<std::vector<GridCell>>& gridMap);
 
     // ── 输出 ──
 

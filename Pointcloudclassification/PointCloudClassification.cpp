@@ -4,27 +4,23 @@
 void PointCloudClassification::fillEmptyGrids(std::vector<std::vector<GridCell>>& gridMap, int rows, int cols) {
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
-            if (gridMap[r][c].is_empty) {
-                int win = 1;
-                bool found = false;
-                while (!found && win <= 3) {
-                    float neighbor_sum = 0.0f;
-                    int neighbor_count = 0;
-                    for (int i = -win; i <= win; ++i) {
-                        for (int j = -win; j <= win; ++j) {
-                            int nr = r + i, nc = c + j;
-                            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !gridMap[nr][nc].is_empty) {
-                                neighbor_sum += gridMap[nr][nc].avg_z;
-                                neighbor_count++;
-                            }
+            if (!gridMap[r][c].is_empty) continue;
+            for (int win = 1; win <= 3; ++win) {
+                float sum = 0;
+                int cnt = 0;
+                for (int i = -win; i <= win; ++i) {
+                    for (int j = -win; j <= win; ++j) {
+                        int nr = r + i, nc = c + j;
+                        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !gridMap[nr][nc].is_empty) {
+                            sum += gridMap[nr][nc].avg_z;
+                            cnt++;
                         }
                     }
-                    if (neighbor_count > 0) {
-                        gridMap[r][c].avg_z = neighbor_sum / neighbor_count;
-                        gridMap[r][c].is_empty = false;
-                        found = true;
-                    }
-                    else win++;
+                }
+                if (cnt > 0) {
+                    gridMap[r][c].avg_z = sum / cnt;
+                    gridMap[r][c].is_empty = false;
+                    break;
                 }
             }
         }
@@ -35,7 +31,7 @@ void PointCloudClassification::fillEmptyGrids(std::vector<std::vector<GridCell>>
 void PointCloudClassification::classifyGrids(std::vector<std::vector<GridCell>>& gridMap, float gridSize) {
     int rows = (int)gridMap.size();
     int cols = (int)gridMap[0].size();
-    const float p1 = 6.0f, p2 = 12.0f;  //�趨����ʶ����ֵ
+    const float p1 = 8.0f, p2 = 18.0f;  //�趨����ʶ����ֵ
     for (int r = 1; r < rows - 1; ++r) {
         for (int c = 1; c < cols - 1; ++c) {
             if (gridMap[r][c].is_empty) continue;
@@ -138,12 +134,12 @@ void PointCloudClassification::closeSlopeHoles(std::vector<std::vector<GridCell>
     auto tempMap = gridMap;
     for (int r = 1; r < rows - 1; ++r) {
         for (int c = 1; c < cols - 1; ++c) {
-            if (gridMap[r][c].type == 1) {
-                for (int i = -1; i <= 1; ++i)
-                    for (int j = -1; j <= 1; ++j)
-                        if (gridMap[r + i][c + j].type == 2) { tempMap[r][c].type = 2; goto next_dil; }
-            }
-        next_dil:;
+            if (gridMap[r][c].type != 1) continue;
+            bool hasSlope = false;
+            for (int i = -1; i <= 1 && !hasSlope; ++i)
+                for (int j = -1; j <= 1; ++j)
+                    if (gridMap[r + i][c + j].type == 2) { hasSlope = true; break; }
+            if (hasSlope) tempMap[r][c].type = 2;
         }
     }
     gridMap = tempMap;
@@ -158,6 +154,28 @@ void PointCloudClassification::closeSlopeHoles(std::vector<std::vector<GridCell>
             }
         }
     }
+}
+
+// ── 假边坡过滤：边坡格5x5邻域内高差<1.5m则转为平台，消除碎石/车辙等局部凸起误判 ──
+void PointCloudClassification::filterFalseSlopes(std::vector<std::vector<GridCell>>& gridMap) {
+    int rows = (int)gridMap.size(), cols = (int)gridMap[0].size();
+    auto tempMap = gridMap;
+    for (int r = 2; r < rows - 2; ++r) {
+        for (int c = 2; c < cols - 2; ++c) {
+            if (gridMap[r][c].type != 2) continue;
+            float minZ = 1e9f, maxZ = -1e9f;
+            for (int i = -2; i <= 2; ++i) {
+                for (int j = -2; j <= 2; ++j) {
+                    if (gridMap[r + i][c + j].is_empty) continue;
+                    float z = gridMap[r + i][c + j].avg_z;
+                    if (z < minZ) minZ = z;
+                    if (z > maxZ) maxZ = z;
+                }
+            }
+            if (maxZ - minZ < 1.5f) tempMap[r][c].type = 1;
+        }
+    }
+    gridMap = tempMap;
 }
 
 // ── 围堰识别：5x5窗口局部凸起检测(0.35~2.2m高差+高于均值+局域高差<3m)→连通滤波去噪 ──
@@ -201,10 +219,6 @@ void PointCloudClassification::identifyBerms(std::vector<std::vector<GridCell>>&
             if (diffH >= minBermH && diffH <= maxBermH && isBump && notBigSlope) {
                 tempMap[r][c].type = 4;
             }
-            else {
-                // ��������㣬ά��ԭ������ԭ��
-                if (tempMap[r][c].type == 4) tempMap[r][c].type = gridMap[r][c].type;
-            }
         }
     }
 
@@ -240,53 +254,29 @@ void PointCloudClassification::fillBermGaps(std::vector<std::vector<GridCell>>& 
         for (int r = 2; r < rows - 2; ++r) {
             for (int c = 2; c < cols - 2; ++c) {
                 if (gridMap[r][c].type == 2) {
+                    auto isY = [&](int dr, int dc) { return gridMap[r + dr][c + dc].type == 4; };
+                    bool hasYellow5x5 = false, hasGreen5x5 = false;
+                    int notYellow3x3 = 0;
 
-                    // --- ̽����Χ���� ---
-                    bool hasYellow5x5 = false;
-                    bool hasGreen5x5 = false;
-
-                    // 3x3 ����ķ���״̬
-                    bool N = (gridMap[r - 1][c].type == 4);
-                    bool S = (gridMap[r + 1][c].type == 4);
-                    bool W = (gridMap[r][c - 1].type == 4);
-                    bool E = (gridMap[r][c + 1].type == 4);
-                    bool NW = (gridMap[r - 1][c - 1].type == 4);
-                    bool SE = (gridMap[r + 1][c + 1].type == 4);
-                    bool NE = (gridMap[r - 1][c + 1].type == 4);
-                    bool SW = (gridMap[r + 1][c - 1].type == 4);
-
-                    // 1. 5x5 ���������Ϊ�˼л��߼���
                     for (int i = -2; i <= 2; ++i) {
                         for (int j = -2; j <= 2; ++j) {
-                            int type = gridMap[r + i][c + j].type;
-                            if (type == 4) hasYellow5x5 = true;
-                            if (type == 1) hasGreen5x5 = true;
-                        }
-                    }
-
-                    // --- �����ж������� ---
-
-                    // �߼� A������Ļ��̼л���5x5 ��Χ��
-                    bool isSandwich = (hasYellow5x5 && hasGreen5x5);
-
-                    // �߼� B���������������߼���3x3 ��Χ��
-                    // ֻҪ��ˮƽ����ֱ��Խ��߷����ϱ���ɫ���л��������ж�ΪΧ����һ����
-                    bool isBridge = (N && S) || (W && E) || (NW && SE) || (NE && SW);
-
-                    // �߼� C�������Ͽ��Ĺµ��ж���ֻ�е���Χȫ�ǻƻ��ʱ��
-                    int notYellowCount = 0;
-                    for (int i = -1; i <= 1; ++i) {
-                        for (int j = -1; j <= 1; ++j) {
-                            if (i == 0 && j == 0) continue;
                             int t = gridMap[r + i][c + j].type;
-                            if (t != 4 && !gridMap[r + i][c + j].is_empty) notYellowCount++;
+                            if (t == 4) hasYellow5x5 = true;
+                            if (t == 1) hasGreen5x5 = true;
+                            if (i >= -1 && i <= 1 && j >= -1 && j <= 1 && !(i == 0 && j == 0))
+                                if (t != 4 && !gridMap[r + i][c + j].is_empty) notYellow3x3++;
                         }
                     }
-                    bool isLoneRed = (notYellowCount == 0);
 
-                    if (isSandwich || isBridge || isLoneRed) {
+                    bool isSandwich = (hasYellow5x5 && hasGreen5x5);
+                    bool isBridge = (isY(-1,0) && isY(1,0))
+                                 || (isY(0,-1) && isY(0,1))
+                                 || (isY(-1,-1) && isY(1,1))
+                                 || (isY(-1,1) && isY(1,-1));
+                    bool isLoneRed = (notYellow3x3 == 0);
+
+                    if (isSandwich || isBridge || isLoneRed)
                         tempMap[r][c].type = 4;
-                    }
                 }
             }
         }
@@ -295,72 +285,129 @@ void PointCloudClassification::fillBermGaps(std::vector<std::vector<GridCell>>& 
     }
 }
 
-// ── 双向扫描提取坡顶/坡底：逐行+逐列检测 平台→边坡/围堰→平台 序列，标记crest/toe ──
+// ── 围堰去噪：围堰格3x3邻域中平台数量≥5时转平台 ──
+void PointCloudClassification::removeIsolatedBerms(std::vector<std::vector<GridCell>>& gridMap) {
+    int rows = (int)gridMap.size(), cols = (int)gridMap[0].size();
+    auto tempMap = gridMap;
+    for (int r = 1; r < rows - 1; ++r) {
+        for (int c = 1; c < cols - 1; ++c) {
+            if (gridMap[r][c].type != 4) continue;
+            int gC = 0;
+            for (int i = -1; i <= 1; ++i)
+                for (int j = -1; j <= 1; ++j)
+                    if (gridMap[r + i][c + j].type == 1) gC++;
+            if (gC >= 5) tempMap[r][c].type = 1;
+        }
+    }
+    gridMap = tempMap;
+}
+
+// ── 双向扫描提取坡顶/坡底：追踪连续type2边坡区块，在区块首尾标记crest/toe ──
 void PointCloudClassification::extractSlopeFeatures(std::vector<std::vector<GridCell>>& gridMap, std::vector<SlopeParams>& results) {
     int rows = (int)gridMap.size();
     int cols = (int)gridMap[0].size();
 
-    // 1. �������
-    for (auto& row : gridMap) for (auto& cell : row) { cell.is_crest = cell.is_toe = false; }
+    for (auto& row : gridMap)
+        for (auto& cell : row) { cell.is_crest = cell.is_toe = false; }
 
-    // ����һ�� Lambda �ڲ���������������߼��������ظ�����
-    auto scanLogic = [&](int startIdx, int endIdx, int outerIdx, bool isColumnScan) {
+    auto scan = [&](int endIdx, int outerIdx, bool isCol) {
+        auto rc = [&](int idx) { return isCol ? std::make_pair(idx, outerIdx) : std::make_pair(outerIdx, idx); };
         bool searching = false;
         int firstIdx = -1;
 
         for (int i = 1; i < endIdx - 1; ++i) {
-            int r = isColumnScan ? i : outerIdx;
-            int c = isColumnScan ? outerIdx : i;
-            int pr = isColumnScan ? i - 1 : outerIdx;
-            int pc = isColumnScan ? outerIdx : i - 1;
-
+            auto [r,  c]  = rc(i);
+            auto [pr, pc] = rc(i - 1);
             if (gridMap[r][c].is_empty) continue;
 
-            // �������������壨��ƽ̨�л�������/Χ����
+            // 起点：当前是边坡 且 前一格不是边坡
             if (!searching) {
-                // ����ǰһ������ƽ̨���������� 2 ��Χ����ƽ̨�������ݴ���
-                bool fromPlatform = (gridMap[pr][pc].type == 1);
-                if (fromPlatform && (gridMap[r][c].type == 2 || gridMap[r][c].type == 4)) {
+                if (gridMap[r][c].type == 2 && gridMap[pr][pc].type != 2) {
                     firstIdx = i;
                     searching = true;
                 }
             }
-            // �������뿪���壨������/Χ���л���ƽ̨��
+            // 终点：当前是边坡 且 下一格不是边坡 → 立即结算
             else {
-                int nr = isColumnScan ? i + 1 : outerIdx;
-                int nc = isColumnScan ? outerIdx : i + 1;
-
-                if ((gridMap[r][c].type == 2 || gridMap[r][c].type == 4) && gridMap[nr][nc].type == 1) {
+                auto [nr, nc] = rc(i + 1);
+                if (gridMap[r][c].type == 2 && gridMap[nr][nc].type != 2) {
                     int lastIdx = i;
 
-                    // ��ȡ���˵�� Z ֵ
-                    float z1 = gridMap[isColumnScan ? firstIdx : outerIdx][isColumnScan ? outerIdx : firstIdx].avg_z;
-                    float z2 = gridMap[isColumnScan ? lastIdx : outerIdx][isColumnScan ? outerIdx : lastIdx].avg_z;
+                    auto [r1, c1] = rc(firstIdx);
+                    auto [r2, c2] = rc(lastIdx);
+                    float z1 = gridMap[r1][c1].avg_z;
+                    float z2 = gridMap[r2][c2].avg_z;
 
                     float height = std::abs(z1 - z2);
-                    if (height > 1.5f) { // ��΢���͸߶���ֵ�������ٻ�
-                        int crestR = (z1 > z2) ? (isColumnScan ? firstIdx : outerIdx) : (isColumnScan ? lastIdx : outerIdx);
-                        int crestC = (z1 > z2) ? (isColumnScan ? outerIdx : firstIdx) : (isColumnScan ? outerIdx : lastIdx);
-                        int toeR = (z1 > z2) ? (isColumnScan ? lastIdx : outerIdx) : (isColumnScan ? firstIdx : outerIdx);
-                        int toeC = (z1 > z2) ? (isColumnScan ? outerIdx : lastIdx) : (isColumnScan ? outerIdx : firstIdx);
+                    float hDist = std::abs(firstIdx - lastIdx) * gridSize;
 
-                        gridMap[crestR][crestC].is_crest = true;
-                        gridMap[toeR][toeC].is_toe = true;
-
+                    if (height > 0.8f && hDist >= 1.0f) {
+                        if (z1 > z2) {
+                            gridMap[r1][c1].is_crest = true;
+                            gridMap[r2][c2].is_toe   = true;
+                        } else {
+                            gridMap[r2][c2].is_crest = true;
+                            gridMap[r1][c1].is_toe   = true;
+                        }
                         SlopeParams p;
                         p.benchHeight = height;
-                        float hDist = std::abs(firstIdx - lastIdx) * this->gridSize;
-                        p.benchAngle = std::atan2(height, hDist) * 180.0f / 3.14159f;
+                        p.benchAngle = std::atan2(height, hDist) * 180.0f / (float)M_PI;
                         results.push_back(p);
                     }
                     searching = false;
                 }
             }
         }
-        };
+    };
 
-    // 2. ִ��˫��ɨ�裺���к��У�ȫ��λ��׽
-    std::cout << "����ִ��˫��������ȡ..." << std::endl;
-    for (int c = 0; c < cols; ++c) scanLogic(0, rows, c, true);  // ����ɨ
-    for (int r = 0; r < rows; ++r) scanLogic(0, cols, r, false); // ����ɨ
+    std::cout << "正在执行双向特征提取..." << std::endl;
+    for (int c = 0; c < cols; ++c) scan(rows, c, true);
+    for (int r = 0; r < rows; ++r) scan(cols, r, false);
+}
+
+// ── 网格骨架细化：原地顺序剔除冗余内角格，保持连通性 ──
+void PointCloudClassification::thinFeatureLines(std::vector<std::vector<GridCell>>& gridMap) {
+    int rows = (int)gridMap.size();
+    int cols = (int)gridMap[0].size();
+
+    for (int r = 1; r < rows - 1; ++r) {
+        for (int c = 1; c < cols - 1; ++c) {
+            if (gridMap[r][c].is_crest) {
+                bool N = gridMap[r - 1][c].is_crest;
+                bool S = gridMap[r + 1][c].is_crest;
+                bool E = gridMap[r][c + 1].is_crest;
+                bool W = gridMap[r][c - 1].is_crest;
+                if ((N && E) || (N && W) || (S && E) || (S && W))
+                    gridMap[r][c].is_crest = false;
+            }
+            if (gridMap[r][c].is_toe) {
+                bool N = gridMap[r - 1][c].is_toe;
+                bool S = gridMap[r + 1][c].is_toe;
+                bool E = gridMap[r][c + 1].is_toe;
+                bool W = gridMap[r][c - 1].is_toe;
+                if ((N && E) || (N && W) || (S && E) || (S && W))
+                    gridMap[r][c].is_toe = false;
+            }
+        }
+    }
+}
+
+// 在 FeatureLine.cpp 中添加
+void PointCloudClassification::smoothFeatureLines(std::vector<FeatureLine>& lines, int iterations) {
+    for (auto& line : lines) {
+        // 点数太少没法平滑
+        if (line.points.size() < 3) continue;
+
+        std::vector<Eigen::Vector3f> temp = line.points;
+        for (int iter = 0; iter < iterations; ++iter) {
+            // 两端点固定，只平滑中间的点
+            for (size_t i = 1; i < line.points.size() - 1; ++i) {
+                // 当前点取自身权重的 50%，前后相邻点各取 25%
+                temp[i] = 0.5f * line.points[i] +
+                    0.25f * line.points[i - 1] +
+                    0.25f * line.points[i + 1];
+            }
+            line.points = temp;
+        }
+    }
 }
