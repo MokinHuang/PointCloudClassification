@@ -1,17 +1,22 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <iomanip>
 #include <windows.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/common/common.h>
 #include "PointCloudClassification.h"
 #include "FeatureLine.h"
+#include "SectionMeasurement.h"
+#include "PlatformMeasurement.h"
+#include "AdaptivePlatform.h"
 
-int main() {
+int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
     // --- 1. 初始化参数 ---
-    std::string filename = "test2.pcd";
+    std::string filename = argc > 1 ? argv[1] : "test2.pcd";
     float gridSize = 1.0f;  // 网格分辨率 1.0m
     PointCloudClassification processor(gridSize);
 
@@ -78,22 +83,45 @@ int main() {
     std::vector<FeatureLine> featureLines =
         extractFeatureLines(gridMap, gridSize, min_pt, 2, 2, 1.2f);
 
+    saveFeatureLinesToTxt(featureLines, "feature_lines_raw.csv");
     smoothFeatureLines(featureLines, 5);
 
     std::vector<FeatureLine> finalLines;
     for (const auto& line : featureLines) {
-        if (line.points.size() >= 4)
+        if (line.points.size() >= 4 || (line.is_branch && line.points.size() >= 2))
             finalLines.push_back(line);
     }
 
     saveFeatureLinesToTxt(finalLines, "feature_lines.csv");
 
-    std::vector<MatchedPair> matched = matchCrestAndToe(finalLines, 15.0f, 1.5f);
-    saveMatchedPairsToCSV(matched, "matched_sections.csv");
+    const auto sections = sections::measure(finalLines, gridMap, gridSize, min_pt);
+    sections::save(sections);
+    const auto adaptiveWidths = platforms::adaptive(sections, finalLines, gridMap, gridSize, min_pt);
+    platforms::saveAdaptive(adaptiveWidths);
+    const auto& platformWidths = adaptiveWidths.original;
+    size_t platformCount = 0;
+    for (const auto& p : platformWidths) if (p.geometry.status == "matched") ++platformCount;
+    std::cout << "[Platforms] " << platformCount << " widths measured.\n";
+    size_t matchedCount = 0;
+    for (const auto& section : sections) if (section.status == "matched") ++matchedCount;
+    std::cout << "[Sections] " << matchedCount << " matched / " << sections.size()
+              << " samples; unmatched reasons saved separately.\n";
 
     // --- 5. 输出分类 PCD ---
     std::string outputName = "result_final.pcd";
     processor.saveVisualizationCloud(gridMap, gridSize, min_pt, max_pt, outputName);
+
+    std::ofstream diagnostic("classification.csv");
+    diagnostic << std::fixed << std::setprecision(6);
+    diagnostic << "r,c,z,type,count,crest,toe\n";
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c) {
+            const auto& cell = gridMap[r][c];
+            diagnostic << r << ',' << c << ',' << cell.avg_z << ',' << cell.type
+                << ',' << cell.count << ',' << cell.is_crest << ',' << cell.is_toe << '\n';
+        }
+    std::ofstream origin("grid_origin.txt");
+    origin << std::setprecision(12) << min_pt[0] << ' ' << min_pt[1] << ' ' << gridSize << '\n';
 
     std::cout << "\n处理完成。特征线已保存至 feature_lines.csv" << std::endl;
     return 0;

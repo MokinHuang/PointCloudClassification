@@ -30,6 +30,7 @@ struct FeatureLine {
     int type;       // 0=坡顶(Crest), 1=坡底(Toe)
     float length;
     int id;
+    bool is_branch = false; // A recovered branch must not be discarded by the final short-line filter.
 
     FeatureLine() : type(0), length(0.0f), id(-1) {}
 };
