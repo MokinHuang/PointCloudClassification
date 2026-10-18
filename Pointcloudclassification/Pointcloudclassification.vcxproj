@@ -135,6 +135,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FeatureLine.h" />
+    <ClInclude Include="SectionMeasurement.h" />
+    <ClInclude Include="PlatformMeasurement.h" />
+    <ClInclude Include="AdaptivePlatform.h" />
     <ClInclude Include="PointCloudClassification.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

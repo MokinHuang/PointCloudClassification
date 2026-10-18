@@ -141,6 +141,45 @@ static std::vector<GridIndex> orderComponentPoints(
     return ordered;
 }
 
+// Keep the original primary trace, then recover vertices on unvisited branches.
+// New branches begin at an existing anchor; no jump between disconnected points.
+static std::vector<std::vector<GridIndex>> orderAllComponentPaths(
+    const std::vector<GridIndex>& comp)
+{
+    std::vector<std::vector<GridIndex>> paths{orderComponentPoints(comp)};
+    std::unordered_set<GridIndex, GridIndexHash> inComp(comp.begin(), comp.end());
+    std::unordered_set<GridIndex, GridIndexHash> used(paths[0].begin(), paths[0].end());
+    while (used.size() < comp.size()) {
+        GridIndex anchor{-1,-1}, first{-1,-1};
+        for (const auto& p : comp) {
+            if (!used.count(p)) continue;
+            for (int k=0;k<8;++k) {
+                GridIndex nb{p.r+DR[k],p.c+DC[k]};
+                if (inComp.count(nb) && !used.count(nb)) { anchor=p;first=nb;break; }
+            }
+            if (first.r>=0) break;
+        }
+        if (first.r<0) break; // Components are connected by construction.
+        std::vector<GridIndex> branch{anchor,first};
+        used.insert(first);
+        while (true) {
+            const auto cur=branch.back(), prev=branch[branch.size()-2];
+            GridIndex next{-1,-1};float best=-2;
+            for (int k=0;k<8;++k) {
+                GridIndex nb{cur.r+DR[k],cur.c+DC[k]};
+                if (!inComp.count(nb) || used.count(nb)) continue;
+                const float len=std::hypot(float(DR[k]),float(DC[k]));
+                const float dot=((cur.r-prev.r)*DR[k]+(cur.c-prev.c)*DC[k])/len;
+                if (dot>best) {best=dot;next=nb;}
+            }
+            if (next.r<0) break;
+            branch.push_back(next);used.insert(next);
+        }
+        paths.push_back(std::move(branch));
+    }
+    return paths;
+}
+
 // ── 特征线提取 ──
 std::vector<FeatureLine> extractFeatureLines(
     const std::vector<std::vector<GridCell>>& gridMap,
@@ -176,12 +215,15 @@ std::vector<FeatureLine> extractFeatureLines(
         for (auto& comp : components) {
             if (static_cast<int>(comp.size()) < 3) continue;
 
-            auto ordered = orderComponentPoints(comp);
+            auto paths = orderAllComponentPaths(comp);
+            for (size_t pathIndex=0;pathIndex<paths.size();++pathIndex) {
+            const auto& ordered = paths[pathIndex];
             if (ordered.size() < 2) continue;
 
             FeatureLine line;
             line.type = lineType;
             line.id   = static_cast<int>(results.size());
+            line.is_branch = pathIndex > 0;
 
             for (const auto& idx : ordered) {
                 float z = gridMap[idx.r][idx.c].avg_z;
@@ -194,6 +236,7 @@ std::vector<FeatureLine> extractFeatureLines(
             }
 
             results.push_back(std::move(line));
+            }
         }
     };
 
@@ -215,90 +258,49 @@ std::vector<FeatureLine> extractFeatureLines(
     return results;
 }
 
-// ── Union-Find合并断线 ──
+// Preserve every input line; retry pending attachments whenever either end grows.
+// Same type and original 3D endpoint distance threshold; no new geometry veto.
 std::vector<FeatureLine> mergeNearbyLines(
     const std::vector<FeatureLine>& lines, float maxDist)
 {
-    int n = static_cast<int>(lines.size());
-    if (n <= 1) return lines;
-
-    std::vector<int> parent(n);
-    for (int i = 0; i < n; ++i) parent[i] = i;
-
-    auto find = [&](int x) {
-        while (parent[x] != x) {
-            parent[x] = parent[parent[x]];
-            x = parent[x];
-        }
-        return x;
-    };
-    auto unite = [&](int a, int b) {
-        int ra = find(a), rb = find(b);
-        if (ra != rb) parent[ra] = rb;
-    };
-
-    for (int i = 0; i < n; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            if (lines[i].type != lines[j].type) continue;
-            if (lines[i].points.empty() || lines[j].points.empty()) continue;
-
-            const auto& head_i = lines[i].points.front();
-            const auto& tail_i = lines[i].points.back();
-            const auto& head_j = lines[j].points.front();
-            const auto& tail_j = lines[j].points.back();
-
-            float d1 = (head_i - head_j).norm();
-            float d2 = (head_i - tail_j).norm();
-            float d3 = (tail_i - head_j).norm();
-            float d4 = (tail_i - tail_j).norm();
-
-            if (d1 <= maxDist || d2 <= maxDist || d3 <= maxDist || d4 <= maxDist) {
-                unite(i, j);
-            }
-        }
-    }
-
-    std::unordered_map<int, std::vector<int>> groups;
-    for (int i = 0; i < n; ++i) groups[find(i)].push_back(i);
-
     std::vector<FeatureLine> merged;
-    for (auto& [root, indices] : groups) {
-        if (indices.size() == 1) {
-            merged.push_back(lines[indices[0]]);
-            continue;
-        }
-
-        std::deque<Eigen::Vector3f> pts;
-        for (const auto& p : lines[indices[0]].points) pts.push_back(p);
-
-        for (size_t k = 1; k < indices.size(); ++k) {
-            const auto& nl = lines[indices[k]].points;
-            float d_th = (pts.back()  - nl.front()).norm();
-            float d_tt = (pts.back()  - nl.back()).norm();
-            float d_hh = (pts.front() - nl.front()).norm();
-            float d_ht = (pts.front() - nl.back()).norm();
-
-            if (d_th <= maxDist) {
-                for (const auto& p : nl) pts.push_back(p);
-            } else if (d_tt <= maxDist) {
-                for (auto it = nl.rbegin(); it != nl.rend(); ++it) pts.push_back(*it);
-            } else if (d_hh <= maxDist) {
-                for (auto it = nl.begin(); it != nl.end(); ++it) pts.push_front(*it);
-            } else if (d_ht <= maxDist) {
-                for (const auto& p : nl) pts.push_front(p);
+    std::vector<bool> used(lines.size(),false);
+    for (size_t seed=0;seed<lines.size();++seed) {
+        if (used[seed]) continue;
+        used[seed]=true;
+        if (lines[seed].points.empty()) {merged.push_back(lines[seed]);continue;}
+        FeatureLine combined=lines[seed];
+        std::deque<Eigen::Vector3f> pts(combined.points.begin(),combined.points.end());
+        bool changed;
+        do {
+            changed=false;
+            for (size_t j=0;j<lines.size();++j) {
+                if (used[j] || lines[j].type!=combined.type || lines[j].points.empty()) continue;
+                const auto& nl=lines[j].points;
+                const float d_th=(pts.back()-nl.front()).norm();
+                const float d_tt=(pts.back()-nl.back()).norm();
+                const float d_hh=(pts.front()-nl.front()).norm();
+                const float d_ht=(pts.front()-nl.back()).norm();
+                if (d_th<=maxDist) {
+                    for (const auto& p:nl) pts.push_back(p);
+                } else if (d_tt<=maxDist) {
+                    for (auto it=nl.rbegin();it!=nl.rend();++it) pts.push_back(*it);
+                } else if (d_hh<=maxDist) {
+                    for (const auto& p:nl) pts.push_front(p);
+                } else if (d_ht<=maxDist) {
+                    for (auto it=nl.rbegin();it!=nl.rend();++it) pts.push_front(*it);
+                } else continue;
+                combined.is_branch=combined.is_branch || lines[j].is_branch;
+                used[j]=true;changed=true;
             }
-        }
-
-        FeatureLine combined;
-        combined.type = lines[indices[0]].type;
-        combined.id   = static_cast<int>(merged.size());
-        for (const auto& p : pts) combined.points.push_back(p);
-        combined.length = 0.0f;
-        for (size_t i = 1; i < combined.points.size(); ++i)
-            combined.length += (combined.points[i] - combined.points[i - 1]).norm();
+        } while(changed);
+        combined.points.assign(pts.begin(),pts.end());
+        combined.length=0;
+        for(size_t i=1;i<combined.points.size();++i)
+            combined.length+=(combined.points[i]-combined.points[i-1]).norm();
+        combined.id=(int)merged.size();
         merged.push_back(std::move(combined));
     }
-
     return merged;
 }
 

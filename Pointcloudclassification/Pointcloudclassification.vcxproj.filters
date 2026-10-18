@@ -29,6 +29,11 @@
     <ClInclude Include="FeatureLine.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="SectionMeasurement.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="PlatformMeasurement.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="AdaptivePlatform.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="PointCloudClassification.h">
       <Filter>头文件</Filter>
     </ClInclude>

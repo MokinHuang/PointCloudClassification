@@ -64,9 +64,10 @@ void PointCloudClassification::saveVisualizationCloud(
             if (gridMap[r][c].is_empty) continue;
 
             pcl::PointXYZRGB pt;
-            pt.x = c * gridSize + min_pt[0];
-            pt.y = r * gridSize + min_pt[1];
+            pt.x = (c + 0.5f) * gridSize + min_pt[0];
+            pt.y = (r + 0.5f) * gridSize + min_pt[1];
             pt.z = gridMap[r][c].avg_z;
+            pt.r = pt.g = pt.b = 180;
 
             if (gridMap[r][c].is_crest) {
                 pt.r = 0; pt.g = 0; pt.b = 0;
@@ -304,6 +305,8 @@ void PointCloudClassification::removeIsolatedBerms(std::vector<std::vector<GridC
 
 // ── 双向扫描提取坡顶/坡底：追踪连续type2边坡区块，在区块首尾标记crest/toe ──
 void PointCloudClassification::extractSlopeFeatures(std::vector<std::vector<GridCell>>& gridMap, std::vector<SlopeParams>& results) {
+    results.clear();
+    if (gridMap.empty() || gridMap[0].empty()) return;
     int rows = (int)gridMap.size();
     int cols = (int)gridMap[0].size();
 
@@ -318,19 +321,23 @@ void PointCloudClassification::extractSlopeFeatures(std::vector<std::vector<Grid
         for (int i = 1; i < endIdx - 1; ++i) {
             auto [r,  c]  = rc(i);
             auto [pr, pc] = rc(i - 1);
-            if (gridMap[r][c].is_empty) continue;
+            if (gridMap[r][c].is_empty || gridMap[r][c].type != 2) {
+                searching = false;
+                firstIdx = -1;
+                continue;
+            }
 
             // 起点：当前是边坡 且 前一格不是边坡
             if (!searching) {
-                if (gridMap[r][c].type == 2 && gridMap[pr][pc].type != 2) {
+                if (gridMap[pr][pc].is_empty || gridMap[pr][pc].type != 2) {
                     firstIdx = i;
                     searching = true;
                 }
             }
             // 终点：当前是边坡 且 下一格不是边坡 → 立即结算
-            else {
+            if (searching) {
                 auto [nr, nc] = rc(i + 1);
-                if (gridMap[r][c].type == 2 && gridMap[nr][nc].type != 2) {
+                if (gridMap[nr][nc].is_empty || gridMap[nr][nc].type != 2) {
                     int lastIdx = i;
 
                     auto [r1, c1] = rc(firstIdx);
@@ -349,7 +356,7 @@ void PointCloudClassification::extractSlopeFeatures(std::vector<std::vector<Grid
                             gridMap[r2][c2].is_crest = true;
                             gridMap[r1][c1].is_toe   = true;
                         }
-                        SlopeParams p;
+                        SlopeParams p{};
                         p.benchHeight = height;
                         p.benchAngle = std::atan2(height, hDist) * 180.0f / (float)M_PI;
                         results.push_back(p);
