@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="源文件">
@@ -34,6 +34,10 @@
     </ClInclude>
     <ClInclude Include="PlatformMeasurement.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="AdaptivePlatform.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="OverallSlopePreview.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="WorkfaceSelector.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="AutoWorkfaces.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="PaperRiskRules.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="PointCloudClassification.h">
       <Filter>头文件</Filter>
     </ClInclude>
