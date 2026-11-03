@@ -12,6 +12,8 @@
 #include "SectionMeasurement.h"
 #include "PlatformMeasurement.h"
 #include "AdaptivePlatform.h"
+#include "WorkfaceSelector.h"
+#include "FeatureGapRepair.h"
 
 int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
@@ -93,6 +95,11 @@ int main(int argc, char* argv[]) {
     }
 
     saveFeatureLinesToTxt(finalLines, "feature_lines.csv");
+    // Inferred bridges are exported separately; formal measurements retain observed inputs.
+    try { gaprepair::run(finalLines, gridMap, gridSize, min_pt); }
+    catch (const std::exception& e) { std::cerr << "Gap repair: " << e.what() << '\n'; return 1; }
+    try { overall::run(finalLines, gridMap, gridSize, min_pt, argc > 2 ? argv[2] : "", ""); }
+    catch (const std::exception& e) { std::cerr << "[Overall preview] " << e.what() << '\n'; return 1; }
 
     const auto sections = sections::measure(finalLines, gridMap, gridSize, min_pt);
     sections::save(sections);

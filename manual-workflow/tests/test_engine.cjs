@@ -1,0 +1,21 @@
+const assert=require('assert/strict'),E=require('../manual-confirmation/engine.js');
+const line=(id,type,p)=>({id,type,p,hash:'h'+id,s:p.map((_,i)=>i?Math.hypot(p[1][0]-p[0][0],p[1][1]-p[0][1]):0)});
+const data={id:'test',cell:1,rows:30,cols:30,lines:[line(1,0,[[2,2,20],[2,22,20]]),line(2,1,[[22,2,0],[22,22,0]])],grid:[]};
+for(let r=0;r<30;r++)for(let c=0;c<30;c++)data.grid.push([r,c,22-c,2]);
+const ref=l=>({id:l.id,hash:l.hash,start:0,end:l.s.at(-1)}),f={id:'a',name:'test',upper:[ref(data.lines[0])],lower:[ref(data.lines[1])],angle:0,left:3,right:21,spacing:3,excluded:[],confirmed:false};
+let rows=E.calculate(data,f);assert.equal(rows.length,7);assert(rows.every(r=>r.height===20&&r.width===20&&r.angle===45));
+let hole=structuredClone(data);hole.grid=hole.grid.filter(g=>!(g[0]===3&&g[1]===10));assert.equal(E.calculate(hole,f)[0].status,'terrain_missing');assert.equal(E.calculate(hole,f)[0].angle,null);
+let multi=structuredClone(data);multi.lines.push(line(3,1,[[21,2,0],[21,22,0]]));assert.equal(E.calculate(multi,{...f,lower:[...f.lower,ref(multi.lines[2])]})[0].status,'multiple_intersections');
+assert.equal(E.calculate(data,{...f,lower:[{...f.lower[0],end:2}]})[1].status,'missing_intersection');
+assert.equal(E.calculate(data,{...f,angle:180,left:-21,right:-3})[0].status,'invalid_pair_order');
+let crossing=structuredClone(data);crossing.lines[1]=line(2,1,[[0,2,0],[10,22,0]]);assert.equal(E.calculate(crossing,{...f,lower:[ref(crossing.lines[1])]})[0].status,'crossing_boundaries');
+let rec={schema:'manual-workface-v1',dataset:'test',faces:[f]};assert.deepEqual(E.restore(data,rec),[f]);assert.throws(()=>E.restore(data,{...rec,dataset:'other'}));assert.throws(()=>E.restore(data,{...rec,faces:[{...f,upper:[{...f.upper[0],hash:'bad'}]}]}));
+let split={...f,upper:[{...f.upper[0],end:10},{...f.upper[0],start:10}]};assert.equal(E.calculate(data,split)[3].status,'valid');
+let excluded=E.calculate(data,{...f,excluded:[0]});assert.equal(E.summary(excluded).valid,6);assert.equal(E.summary(excluded).missingRatio,0);
+let bad={...f,spacing:0};assert.throws(()=>E.calculate(data,bad));
+console.log('PASS: analytic 20m/20m/45deg; missing terrain; multiple intersections; missing boundary; reverse pairing; crossing; save/load; dataset mismatch; source mismatch; split vertex; exclusions; invalid spacing');
+// Multiple DIFFERENT source segments form one boundary without a fabricated connector.
+let parts=structuredClone(data);parts.lines[0]=line(1,0,[[2,2,20],[2,12,20]]);parts.lines.push(line(3,0,[[2,13,20],[2,22,20]]));let pf={...f,upper:[ref(parts.lines[0]),ref(parts.lines[2])],left:11,right:14,spacing:1};assert.equal(E.calculate(parts,pf)[0].status,'valid');assert.equal(E.calculate(parts,pf)[3].status,'valid');
+let af={...f,confirmed:true,reviewer:'test'},calc=[{rows:E.calculate(data,af)}];assert(E.contained([5,5,0],[15,15,0],af,calc[0].rows));assert(!E.contained([0,5,0],[15,15,0],af,calc[0].rows));let excludedRows=E.calculate(data,{...af,excluded:[2]});assert(!E.contained([5,5,0],[15,15,0],af,excludedRows));
+let md=structuredClone(data);md.origin=[0,0];md.measurements=[{source:'test.csv',sourceHash:'test',kind:'bench',row:{pair_id:1,crest_line_id:1,crest_station:3,toe_line_id:2,toe_segment:0,toe_fraction:.15,crest_x:2,crest_y:5,crest_z:20,toe_x:22,toe_y:5,toe_z:0,h_dist:20,v_drop:20,angle:45}}];assert.equal(E.associate(md,[af],calc)[0].status,'associated_geometry_only');assert.equal(E.associate(md,[f],calc)[0].status,'range_not_confirmed');assert.equal(E.associate(md,[af,{...af,id:'b'}],[...calc,...calc])[0].status,'ambiguous_ownership');md.measurements[0].row.angle=44;assert.equal(E.associate(md,[af],calc)[0].status,'source_geometry_unverified');
+console.log('PASS: distinct source lines; corridor containment; excluded corridor; verified association; unconfirmed/ambiguous/source mismatch refusal');

@@ -135,9 +135,22 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FeatureLine.h" />
+    <ClInclude Include="FeatureGapRepair.h" />
+    <ClInclude Include="WorkfaceRangeReview.h" />
+    <ClInclude Include="GroupedWorkfaces.h" />
+    <ClInclude Include="WorkfaceResolution.h" />
+    <ClInclude Include="ContinuousWorkfaces.h" />
+    <ClInclude Include="WorkfaceOwnership.h" />
+    <ClInclude Include="ThroughWorkfaces.h" />
+    <ClInclude Include="ResolvedWorkfaceReview.h" />
+    <ClInclude Include="GroupedWorkfaceReview.h" />
     <ClInclude Include="SectionMeasurement.h" />
     <ClInclude Include="PlatformMeasurement.h" />
     <ClInclude Include="AdaptivePlatform.h" />
+    <ClInclude Include="OverallSlopePreview.h" />
+    <ClInclude Include="WorkfaceSelector.h" />
+    <ClInclude Include="AutoWorkfaces.h" />
+    <ClInclude Include="PaperRiskRules.h" />
     <ClInclude Include="PointCloudClassification.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
