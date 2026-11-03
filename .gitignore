@@ -10,3 +10,10 @@ x64/
 *.db
 *.opendb
 *.pcd
+# Local generated artifacts
+**/build/
+**/__pycache__/
+*.obj
+*.exe
+*.dll
+manual-workflow/run-output/
